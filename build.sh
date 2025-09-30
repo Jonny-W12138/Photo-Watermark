@@ -1,85 +1,78 @@
-#!/bin/bash
+name: Build and Release 照片水印工具
 
-# 照片水印工具 macOS 应用构建脚本
+on:
+    push:
+    tags:
+        - 'v*.*.*'  # 匹配 v1.0.0 这样的 tag
 
-echo "🚀 开始构建照片水印工具 macOS 应用程序"
+jobs:
+    build-and-release:
+    runs-on: macos-latest  # 使用 macOS runner 以支持 dmg 和 app 构建
+    permissions:
+        contents: write  # 允许写入 Release
 
-# 检查是否在 macOS 上
-if [[ "$OSTYPE" != "darwin"* ]]; then
-    echo "❌ 此脚本只能在 macOS 上运行"
-    exit 1
-fi
+    steps:
+        - name: 检出代码
+        uses: actions/checkout@v4
 
-# 检查 Python 环境
-if ! command -v python3 &> /dev/null; then
-    echo "❌ 未找到 Python 3，请先安装 Python"
-    exit 1
-fi
+        - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+            python-version: '3.x'  # 使用最新 Python 3.x 版本
 
-# 安装依赖
-echo "📦 安装依赖包..."
-pip3 install -r requirements.txt
-pip3 install pyinstaller
+        - name: 安装依赖
+        run: |
+            python3 -m pip install --upgrade pip
+            pip3 install -r requirements.txt
+            pip3 install pyinstaller
 
-# 清理之前的构建
-echo "🧹 清理之前的构建文件..."
-rm -rf build dist *.spec
+        - name: 执行 build.sh 构建 app 和 dmg
+        run: |
+            chmod +x build.sh
+            ./build.sh <<< 'y'  # 自动回答 'y' 以创建 DMG 文件
 
-# 使用 PyInstaller 构建应用
-echo "🔨 开始构建应用程序..."
-pyinstaller \
-    --name="照片水印工具" \
-    --windowed \
-    --onedir \
-    --clean \
-    --noconfirm \
-    --add-data="template_manager.py:." \
-    --add-data="watermark_engine.py:." \
-    --hidden-import="PIL._tkinter_finder" \
-    --hidden-import="PIL.Image" \
-    --hidden-import="PIL.ImageDraw" \
-    --hidden-import="PIL.ImageFont" \
-    --hidden-import="PIL.ImageQt" \
-    --hidden-import="PyQt6.QtCore" \
-    --hidden-import="PyQt6.QtGui" \
-    --hidden-import="PyQt6.QtWidgets" \
-    app.py
+        - name: 压缩 .app 目录为 .zip
+        run: |
+            cd dist
+            zip -r "照片水印工具.app.zip" "照片水印工具.app"
+            cd ..
 
-if [ $? -eq 0 ]; then
-    echo "✅ 应用程序构建成功！"
-    echo "📍 应用程序位置: $(pwd)/dist/照片水印工具.app"
-    
-    # 询问是否创建 DMG
-    read -p "是否创建 DMG 安装包？(y/N): " create_dmg
-    if [[ $create_dmg =~ ^[Yy]$ ]]; then
-        echo "📦 创建 DMG 安装包..."
-        dmg_name="照片水印工具-macOS-$(date +%Y%m%d).dmg"
-        
-        # 删除旧的 DMG
-        rm -f "$dmg_name"
-        
-        # 创建 DMG
-        hdiutil create \
-            -volname "照片水印工具" \
-            -srcfolder "dist/照片水印工具.app" \
-            -ov -format UDZO \
-            "$dmg_name"
-        
-        if [ $? -eq 0 ]; then
-            echo "✅ DMG 创建成功: $dmg_name"
-        else
-            echo "❌ DMG 创建失败"
-        fi
-    fi
-    
-    echo ""
-    echo "🎉 构建完成！"
-    echo "💡 使用说明："
-    echo "   1. 双击 'dist/照片水印工具.app' 运行应用"
-    echo "   2. 如果遇到安全提示，请在 系统偏好设置 > 安全性与隐私 中允许运行"
-    echo "   3. 或者在终端中运行: xattr -cr 'dist/照片水印工具.app'"
-    
-else
-    echo "❌ 构建失败"
-    exit 1
-fi
+        - name: 检查生成的文件
+        run: |
+            ls -lh dist/照片水印工具.app.zip
+            ls -lh 照片水印工具-macOS-$(date +%Y%m%d).dmg || echo "DMG 文件未找到，可能构建失败"
+
+        - name: 创建 Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+            tag_name: ${{ github.ref }}
+            release_name: Release ${{ github.ref }}
+            body: |
+            ## 照片水印工具 Release
+            - 自动构建的 macOS 应用程序（.zip 格式）和 DMG 安装包
+            - 构建时间: ${{ github.event.head_commit.timestamp }}
+            draft: false
+            prerelease: false
+
+        - name: 上传 app 的 zip 文件到 Release
+        uses: actions/upload-release-asset@v1
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+            upload_url: ${{ steps.create_release.outputs.upload_url }}
+            asset_path: ./dist/照片水印工具.app.zip
+            asset_name: 照片水印工具.app.zip
+            asset_content_type: application/zip
+
+        - name: 上传 dmg 文件到 Release
+        uses: actions/upload-release-asset@v1
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+            upload_url: ${{ steps.create_release.outputs.upload_url }}
+            asset_path: ./照片水印工具-macOS-$(date +%Y%m%d).dmg
+            asset_name: 照片水印工具-macOS-$(date +%Y%m%d).dmg
+            asset_content_type: application/octet-stream

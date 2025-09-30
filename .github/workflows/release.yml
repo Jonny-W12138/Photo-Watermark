@@ -1,3 +1,4 @@
+```yaml
 name: Build and Release 照片水印工具
 
 on:
@@ -31,6 +32,17 @@ jobs:
           chmod +x build.sh
           ./build.sh <<< 'y'  # 自动回答 'y' 以创建 DMG 文件
 
+      - name: 压缩 .app 目录为 .zip
+        run: |
+          cd dist
+          zip -r "照片水印工具.app.zip" "照片水印工具.app"
+          cd ..
+
+      - name: 检查生成的文件
+        run: |
+          ls -lh dist/照片水印工具.app.zip
+          ls -lh 照片水印工具-macOS-$(date +%Y%m%d).dmg || echo "DMG 文件未找到，可能构建失败"
+
       - name: 创建 Release
         id: create_release
         uses: actions/create-release@v1
@@ -41,20 +53,20 @@ jobs:
           release_name: Release ${{ github.ref }}
           body: |
             ## 照片水印工具 Release
-            - 自动构建的 macOS 应用程序和 DMG 安装包
+            - 自动构建的 macOS 应用程序（.zip 格式）和 DMG 安装包
             - 构建时间: ${{ github.event.head_commit.timestamp }}
           draft: false
           prerelease: false
 
-      - name: 上传 app 文件到 Release
+      - name: 上传 app 的 zip 文件到 Release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist/照片水印工具.app
-          asset_name: 照片水印工具.app
-          asset_content_type: application/octet-stream
+          asset_path: ./dist/照片水印工具.app.zip
+          asset_name: 照片水印工具.app.zip
+          asset_content_type: application/zip
 
       - name: 上传 dmg 文件到 Release
         uses: actions/upload-release-asset@v1
@@ -65,3 +77,4 @@ jobs:
           asset_path: ./照片水印工具-macOS-$(date +%Y%m%d).dmg
           asset_name: 照片水印工具-macOS-$(date +%Y%m%d).dmg
           asset_content_type: application/octet-stream
+```
