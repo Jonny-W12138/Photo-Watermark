@@ -46,37 +46,28 @@ jobs:
           ls -lh dist/照片水印工具.app.zip
           ls -lh 照片水印工具-macOS-$(date +%Y%m%d).dmg || echo "DMG 文件未找到，可能构建失败"
 
-      - name: 创建 Release
-        id: create_release
-        uses: actions/create-release@v1
+      - name: 检查 GITHUB_TOKEN 权限
+        run: |
+          echo "检查 GITHUB_TOKEN 权限..."
+          curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/$GITHUB_REPOSITORY | jq .permissions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建 Release 并上传文件
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}  # 使用纯 tag 名，例如 v2.0.6
-          release_name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}  # 使用纯 tag 名，例如 v2.0.7
+          name: Release ${{ github.ref_name }}
           body: |
             ## 照片水印工具 Release
             - 自动构建的 macOS 应用程序（.zip 格式）和 DMG 安装包
             - 构建时间: ${{ github.event.head_commit.timestamp }}
           draft: false
           prerelease: false
-
-      - name: 上传 app 的 zip 文件到 Release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist/照片水印工具.app.zip
-          asset_name: 照片水印工具.app.zip
-          asset_content_type: application/zip
-
-      - name: 上传 dmg 文件到 Release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./照片水印工具-macOS-$(date +%Y%m%d).dmg
-          asset_name: 照片水印工具-macOS-$(date +%Y%m%d).dmg
-          asset_content_type: application/octet-stream
+          files: |
+            dist/照片水印工具.app.zip
+            照片水印工具-macOS-$(date +%Y%m%d).dmg
