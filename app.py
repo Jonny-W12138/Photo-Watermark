@@ -230,14 +230,14 @@ class MainWindow(QWidget):
         self.preview_scale_factor: float = 1.0  # scene pixels to original pixels
         self.watermark_type: str = "text"  # "text" or "image"
         self.text_settings = {
-            "text": "water demo",
+            "text": "示例水印",
             "font_family": "Helvetica",  # Default font family
-            "font_size": 50,
+            "font_size": 36,
             "color_rgba": (255, 255, 255, 255),
-            "stroke_width": 0,
-            "stroke_rgba": None,
-            "shadow_offset": (0, 0),
-            "shadow_rgba": None,
+            "stroke_width": 2,  # Default stroke width for visibility
+            "stroke_rgba": (0, 0, 0, 255),  # Default black stroke
+            "shadow_offset": (2, 2),  # Default shadow offset
+            "shadow_rgba": (128, 128, 128, 128),  # Default gray shadow
         }
         self.image_settings = {
             "wm_image_path": None,
@@ -341,11 +341,14 @@ class MainWindow(QWidget):
         self.opacity_slider.setValue(int(self.global_settings["opacity"] * 100))
         self.stroke_width_spin = QSpinBox()
         self.stroke_width_spin.setRange(0, 20)
+        self.stroke_width_spin.setValue(self.text_settings["stroke_width"])  # Set initial value
         self.stroke_color_btn = QPushButton("描边颜色")
         self.shadow_offset_x = QSpinBox()
         self.shadow_offset_y = QSpinBox()
         self.shadow_offset_x.setRange(-50, 50)
         self.shadow_offset_y.setRange(-50, 50)
+        self.shadow_offset_x.setValue(self.text_settings["shadow_offset"][0])  # Set initial value
+        self.shadow_offset_y.setValue(self.text_settings["shadow_offset"][1])  # Set initial value
         self.shadow_color_btn = QPushButton("阴影颜色")
 
         self.rotate_slider = QSlider(Qt.Orientation.Horizontal)
@@ -564,36 +567,22 @@ class MainWindow(QWidget):
         # Watermark item
         self.global_settings["type"] = self.watermark_type
         if self.watermark_type == "text":
-            # Use simple QGraphicsTextItem for preview (faster and more reliable)
-            text = self.text_settings["text"]
-            self.wm_text_item = DraggableTextItem(text)
-            
-            # Set font with pixel size for consistency
-            qfont = QFont(self.font_combo.currentFont())
-            # Convert font size to pixels and scale for preview
-            pixel_size = int(self.text_settings["font_size"] * self.preview_scale_factor)
-            qfont.setPixelSize(max(8, pixel_size))  # Minimum readable size
-            qfont.setBold(self.bold_check.isChecked())
-            qfont.setItalic(self.italic_check.isChecked())
-            self.wm_text_item.setFont(qfont)
-            
-            # Set color
-            rgba = self.text_settings["color_rgba"]
-            if rgba and len(rgba) >= 3:
-                self.wm_text_item.setDefaultTextColor(QColor(rgba[0], rgba[1], rgba[2], rgba[3] if len(rgba) > 3 else 255))
-            else:
-                self.wm_text_item.setDefaultTextColor(QColor(255, 255, 255, 255))
-            
-            self.wm_text_item.setOpacity(self.global_settings["opacity"])
-            # Set boundary rectangle for constraining movement
-            self.wm_text_item.setBaseRect(self.base_item.boundingRect())
-            self.scene.addItem(self.wm_text_item)
-            # Position preset or manual
-            self._place_wm_item(self.wm_text_item)
-            # Rotation
-            self._rotate_item(self.wm_text_item, self.global_settings["rotation_deg"])
-            # Set initial drag state based on current tab (enable for text/image tabs, disable for layout tab)
-            self._set_watermark_draggable(self.tabs.currentIndex() != 2)
+            # Render text with PIL for accurate preview including stroke and shadow
+            text_img = self._render_text_preview()
+            if text_img:
+                text_pix = pil_to_qpixmap(text_img)
+                self.wm_text_item = DraggableWatermarkItem(text_pix)
+                # Opacity is already applied in PIL rendering, so set QGraphicsItem opacity to 1.0
+                self.wm_text_item.setOpacity(1.0)
+                # Set boundary rectangle for constraining movement
+                self.wm_text_item.setBaseRect(self.base_item.boundingRect())
+                self.scene.addItem(self.wm_text_item)
+                # Position preset or manual
+                self._place_wm_item(self.wm_text_item)
+                # Rotation
+                self._rotate_item(self.wm_text_item, self.global_settings["rotation_deg"])
+                # Set initial drag state based on current tab (enable for text/image tabs, disable for layout tab)
+                self._set_watermark_draggable(self.tabs.currentIndex() != 2)
         else:
             # image watermark
             wm_path = self.image_settings["wm_image_path"]
@@ -617,6 +606,114 @@ class MainWindow(QWidget):
                 self._set_watermark_draggable(self.tabs.currentIndex() != 2)
 
         self.view.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _render_text_preview(self) -> Optional[Image.Image]:
+        """Render text watermark using PIL for accurate preview with stroke and shadow effects"""
+        from watermark_engine import load_font, compose_text_watermark
+        
+        text = self.text_settings.get("text", "")
+        if not text:
+            return None
+            
+        # Scale font size for preview
+        preview_font_size = int(self.text_settings["font_size"] * self.preview_scale_factor)
+        if preview_font_size < 8:
+            preview_font_size = 8
+            
+        # Debug: print current settings
+        print(f"预览渲染设置:")
+        print(f"  文本: '{text}'")
+        print(f"  字体大小: {preview_font_size} (原始: {self.text_settings['font_size']}, 缩放: {self.preview_scale_factor})")
+        print(f"  描边宽度: {self.text_settings.get('stroke_width', 0)}")
+        print(f"  描边颜色: {self.text_settings.get('stroke_rgba')}")
+        print(f"  阴影偏移: {self.text_settings.get('shadow_offset', (0, 0))}")
+        print(f"  阴影颜色: {self.text_settings.get('shadow_rgba')}")
+            
+        # Create preview settings with scaled values
+        preview_settings = {
+            "text": text,
+            "font_family": self.text_settings.get("font_family", "Helvetica"),
+            "font_size": preview_font_size,
+            "font_bold": self.bold_check.isChecked(),
+            "font_italic": self.italic_check.isChecked(),
+            "color_rgba": self.text_settings.get("color_rgba", (255, 255, 255, 255)),
+            "stroke_width": int(self.text_settings.get("stroke_width", 0) * self.preview_scale_factor),
+            "stroke_rgba": self.text_settings.get("stroke_rgba"),
+            "shadow_offset": (
+                int(self.text_settings.get("shadow_offset", (0, 0))[0] * self.preview_scale_factor),
+                int(self.text_settings.get("shadow_offset", (0, 0))[1] * self.preview_scale_factor)
+            ) if self.text_settings.get("shadow_offset") else (0, 0),
+            "shadow_rgba": self.text_settings.get("shadow_rgba")
+        }
+        
+        try:
+            print(f"调用 compose_text_watermark 参数:")
+            print(f"  text: '{preview_settings['text']}'")
+            print(f"  font_family: {preview_settings['font_family']}")
+            print(f"  font_size: {preview_settings['font_size']}")
+            print(f"  color_rgba: {preview_settings['color_rgba']}")
+            print(f"  stroke_width: {preview_settings['stroke_width']}")
+            print(f"  stroke_rgba: {preview_settings['stroke_rgba']}")
+            print(f"  shadow_offset: {preview_settings['shadow_offset']}")
+            print(f"  shadow_rgba: {preview_settings['shadow_rgba']}")
+            print(f"  bold: {preview_settings['font_bold']}")
+            print(f"  italic: {preview_settings['font_italic']}")
+            
+            # Render text watermark with correct parameter order
+            text_img = compose_text_watermark(
+                text=preview_settings["text"],
+                font_family=preview_settings["font_family"],
+                font_size=preview_settings["font_size"],
+                color_rgba=preview_settings["color_rgba"],
+                stroke_width=preview_settings["stroke_width"],
+                stroke_rgba=preview_settings["stroke_rgba"],
+                shadow_offset=preview_settings["shadow_offset"],
+                shadow_rgba=preview_settings["shadow_rgba"],
+                bold=preview_settings["font_bold"],
+                italic=preview_settings["font_italic"]
+            )
+            
+            print(f"文本渲染成功，图像尺寸: {text_img.size}")
+            
+            # Apply opacity to the entire text image (including stroke and shadow)
+            opacity = self.global_settings.get("opacity", 1.0)
+            if opacity < 1.0:
+                # Create a new image with adjusted alpha channel
+                if text_img.mode == "RGBA":
+                    # Split channels
+                    r, g, b, a = text_img.split()
+                    # Apply opacity to alpha channel
+                    from PIL import ImageEnhance
+                    enhancer = ImageEnhance.Brightness(a)
+                    a = enhancer.enhance(opacity)
+                    # Recombine channels
+                    text_img = Image.merge("RGBA", (r, g, b, a))
+            
+            return text_img
+            
+        except Exception as e:
+            print(f"预览文本渲染失败: {e}")
+            # Fallback to simple text rendering
+            try:
+                from PIL import ImageDraw, ImageFont
+                # Create a simple text image as fallback
+                temp_img = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(temp_img)
+                try:
+                    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", preview_font_size)
+                except:
+                    font = ImageFont.load_default()
+                
+                color = preview_settings["color_rgba"][:3] if preview_settings["color_rgba"] else (255, 255, 255)
+                draw.text((10, 10), text, fill=color, font=font)
+                
+                # Crop to content
+                bbox = temp_img.getbbox()
+                if bbox:
+                    return temp_img.crop(bbox)
+                return temp_img
+            except:
+                return None
 
     def _place_wm_item(self, item):
         # Simplified position calculation that matches export logic exactly
@@ -665,8 +762,7 @@ class MainWindow(QWidget):
     def on_text_changed(self, s: str):
         self.watermark_type = "text"
         self.text_settings["text"] = s
-        if self.wm_text_item:
-            self.wm_text_item.setPlainText(s)
+        # Text item is now a rendered pixmap, so we need to update the entire preview
         self._update_preview()
 
     def on_font_text_changed(self, font_name: str):
@@ -690,8 +786,12 @@ class MainWindow(QWidget):
         self.watermark_type = "text"
         # Store current visual position before updating
         current_visual_pos = None
+        current_item = None
+        
+        # Text watermark now uses wm_text_item (which is a DraggableWatermarkItem for rendered text)
         if hasattr(self, 'wm_text_item') and self.wm_text_item and self.base_item:
             current_visual_pos = self.wm_text_item.pos()
+            current_item = self.wm_text_item
         
         # Update preview with new font style
         self._update_preview()
@@ -793,9 +893,18 @@ class MainWindow(QWidget):
         
         for item in items:
             if draggable:
-                item.setFlags(item.flags() | item.GraphicsItemFlag.ItemIsMovable)
+                # Use the correct flag type for both DraggableWatermarkItem and DraggableTextItem
+                if hasattr(item, 'GraphicsItemFlag'):
+                    item.setFlags(item.flags() | item.GraphicsItemFlag.ItemIsMovable)
+                else:
+                    # Fallback for QGraphicsPixmapItem
+                    item.setFlags(item.flags() | QGraphicsPixmapItem.GraphicsItemFlag.ItemIsMovable)
             else:
-                item.setFlags(item.flags() & ~item.GraphicsItemFlag.ItemIsMovable)
+                if hasattr(item, 'GraphicsItemFlag'):
+                    item.setFlags(item.flags() & ~item.GraphicsItemFlag.ItemIsMovable)
+                else:
+                    # Fallback for QGraphicsPixmapItem
+                    item.setFlags(item.flags() & ~QGraphicsPixmapItem.GraphicsItemFlag.ItemIsMovable)
 
     # Templates
     def save_template_clicked(self):
@@ -944,6 +1053,8 @@ class MainWindow(QWidget):
     def mouseReleaseEvent(self, event):
         # After dragging, record manual position converted back to original image coordinates
         dragged_item = None
+        
+        # Check for any draggable watermark item (both image and text watermarks use similar items now)
         if hasattr(self, 'wm_item') and self.wm_item and self.wm_item in self.scene.items():
             dragged_item = self.wm_item
         elif hasattr(self, 'wm_text_item') and self.wm_text_item and self.wm_text_item in self.scene.items():
