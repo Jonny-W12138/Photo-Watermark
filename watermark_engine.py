@@ -1,0 +1,304 @@
+import math
+import os
+from typing import Tuple, Optional, Dict, Any
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+
+# Utility: clamp
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+# Utility: convert degrees to radians
+def deg2rad(deg: float) -> float:
+    return deg * math.pi / 180.0
+
+
+# Position presets (nine-grid)
+PRESET_POSITIONS = {
+    "top_left": (0.0, 0.0),
+    "top_center": (0.5, 0.0),
+    "top_right": (1.0, 0.0),
+    "center_left": (0.0, 0.5),
+    "center": (0.5, 0.5),
+    "center_right": (1.0, 0.5),
+    "bottom_left": (0.0, 1.0),
+    "bottom_center": (0.5, 1.0),
+    "bottom_right": (1.0, 1.0),
+}
+
+
+def load_font(font_path: Optional[str], size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
+    """
+    Load a font. If font_path is None or invalid, fall back to default.
+    Note: Pillow does not easily toggle bold/italic without providing specific font files.
+    """
+    try:
+        if font_path and os.path.exists(font_path):
+            return ImageFont.truetype(font_path, size=size)
+    except Exception:
+        pass
+    # Fallback: DejaVuSans (if available), otherwise PIL default (bitmap)
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def apply_resize(img: Image.Image, resize_opts: Dict[str, Any]) -> Image.Image:
+    """
+    Resize by width/height or percent. Keeps aspect ratio when one dimension provided.
+    resize_opts: {"width": Optional[int], "height": Optional[int], "percent": Optional[float]}
+    """
+    width = resize_opts.get("width")
+    height = resize_opts.get("height")
+    percent = resize_opts.get("percent")
+    if percent:
+        percent = max(0.01, float(percent))
+        new_size = (max(1, int(img.width * percent)), max(1, int(img.height * percent)))
+        return img.resize(new_size, Image.Resampling.LANCZOS)
+    if width and height:
+        return img.resize((int(width), int(height)), Image.Resampling.LANCZOS)
+    if width and not height:
+        w = int(width)
+        h = max(1, int(img.height * (w / img.width)))
+        return img.resize((w, h), Image.Resampling.LANCZOS)
+    if height and not width:
+        h = int(height)
+        w = max(1, int(img.width * (h / img.height)))
+        return img.resize((w, h), Image.Resampling.LANCZOS)
+    return img
+
+
+def compose_text_watermark(
+    text: str,
+    font_path: Optional[str],
+    font_size: int,
+    color_rgba: Tuple[int, int, int, int],
+    stroke_width: int = 0,
+    stroke_rgba: Optional[Tuple[int, int, int, int]] = None,
+    shadow_offset: Tuple[int, int] = (0, 0),
+    shadow_rgba: Optional[Tuple[int, int, int, int]] = None,
+) -> Image.Image:
+    """
+    Create a RGBA image containing the rendered text with optional stroke and shadow.
+    """
+    font = load_font(font_path, size=font_size)
+    # Preliminary size
+    dummy_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(dummy_img)
+    bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    pad = max(4, stroke_width + max(abs(shadow_offset[0]), abs(shadow_offset[1])))
+    canvas = Image.new("RGBA", (text_w + pad * 2, text_h + pad * 2), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+
+    x = pad
+    y = pad
+
+    # Shadow
+    if shadow_rgba and (shadow_offset != (0, 0)):
+        sx = x + shadow_offset[0]
+        sy = y + shadow_offset[1]
+        draw.text(
+            (sx, sy),
+            text,
+            font=font,
+            fill=shadow_rgba,
+            stroke_width=stroke_width,
+            stroke_fill=shadow_rgba if stroke_rgba is None else stroke_rgba,
+        )
+
+    # Stroke + Text
+    if stroke_width > 0 and stroke_rgba:
+        draw.text((x, y), text, font=font, fill=color_rgba, stroke_width=stroke_width, stroke_fill=stroke_rgba)
+    else:
+        draw.text((x, y), text, font=font, fill=color_rgba)
+
+    return canvas
+
+
+def compose_image_watermark(
+    wm_img: Image.Image,
+    scale: float,
+    opacity: float,
+) -> Image.Image:
+    """
+    Prepare image watermark with scale and opacity. wm_img should be RGBA.
+    """
+    scale = max(0.01, scale)
+    new_size = (max(1, int(wm_img.width * scale)), max(1, int(wm_img.height * scale)))
+    wm = wm_img.resize(new_size, Image.Resampling.LANCZOS)
+    if opacity < 1.0:
+        alpha = wm.split()[-1]
+        alpha = ImageEnhanceBrightness(alpha).enhance(opacity)  # custom helper below
+        wm.putalpha(alpha)
+    return wm
+
+
+class ImageEnhanceBrightness:
+    """
+    Minimal enhancer for alpha to emulate opacity scaling: output = alpha * opacity
+    """
+    def __init__(self, img: Image.Image):
+        self.img = img
+
+    def enhance(self, factor: float) -> Image.Image:
+        lut = [int(clamp(i * factor, 0, 255)) for i in range(256)]
+        return self.img.point(lut)
+
+
+def rotate_image_rgba(img: Image.Image, angle_deg: float) -> Image.Image:
+    """
+    Rotate RGBA image around center with transparent background.
+    """
+    if angle_deg % 360 == 0:
+        return img
+    return img.rotate(angle_deg, resample=Image.Resampling.BICUBIC, expand=True)
+
+
+def paste_with_alpha(base: Image.Image, overlay: Image.Image, pos: Tuple[int, int]) -> None:
+    """
+    Paste overlay onto base at pos using alpha channel.
+    """
+    base.alpha_composite(overlay, dest=pos)
+
+
+def calc_position(
+    base_size: Tuple[int, int],
+    overlay_size: Tuple[int, int],
+    preset_key: Optional[str],
+    manual_pos_px: Optional[Tuple[int, int]],
+    margin: Tuple[int, int] = (10, 10),
+) -> Tuple[int, int]:
+    """
+    Calculate position either from nine-grid preset or manual pixel position.
+    """
+    bw, bh = base_size
+    ow, oh = overlay_size
+    mx, my = margin
+    if manual_pos_px is not None:
+        # Ensure within bounds with margin
+        x = clamp(manual_pos_px[0], mx, max(0, bw - ow - mx))
+        y = clamp(manual_pos_px[1], my, max(0, bh - oh - my))
+        return int(x), int(y)
+
+    if preset_key in PRESET_POSITIONS:
+        px, py = PRESET_POSITIONS[preset_key]
+        # Map fractional positions to pixel coords with margin
+        x_candidates = {
+            0.0: mx,
+            0.5: int((bw - ow) / 2),
+            1.0: bw - ow - mx,
+        }
+        y_candidates = {
+            0.0: my,
+            0.5: int((bh - oh) / 2),
+            1.0: bh - oh - my,
+        }
+        x = x_candidates.get(px, int((bw - ow) / 2))
+        y = y_candidates.get(py, int((bh - oh) / 2))
+        return int(x), int(y)
+
+    # Default center
+    return int((bw - ow) / 2), int((bh - oh) / 2)
+
+
+def apply_watermark(
+    base_img: Image.Image,
+    settings: Dict[str, Any],
+    preview_scale_factor: Optional[float] = None,
+) -> Image.Image:
+    """
+    Apply either text or image watermark to base_img according to settings.
+    settings keys:
+      - type: "text" or "image"
+      - opacity: 0..1
+      - rotation_deg: float
+      - position_preset: Optional[str]
+      - manual_pos_px: Optional[Tuple[int,int]]  (in original pixel coordinates)
+      - margin: Tuple[int,int]
+    Text:
+      - text, font_path, font_size, color_rgba, stroke_width, stroke_rgba, shadow_offset, shadow_rgba
+    Image:
+      - wm_image_path, wm_scale
+    preview_scale_factor:
+      - if manual_pos_px provided in preview scene coords, supply scale factor to convert to original pixels
+    """
+    img = base_img.convert("RGBA")
+    typ = settings.get("type", "text")
+    opacity = clamp(float(settings.get("opacity", 1.0)), 0.0, 1.0)
+    rotation_deg = float(settings.get("rotation_deg", 0.0))
+    position_preset = settings.get("position_preset")
+    manual_pos_px = settings.get("manual_pos_px")
+    margin = settings.get("margin", (10, 10))
+    if manual_pos_px and preview_scale_factor and preview_scale_factor > 0:
+        manual_pos_px = (int(manual_pos_px[0] / preview_scale_factor), int(manual_pos_px[1] / preview_scale_factor))
+
+    if typ == "text":
+        text = settings.get("text", "")
+        font_path = settings.get("font_path")
+        font_size = int(settings.get("font_size", 32))
+        color_rgba = settings.get("color_rgba", (255, 255, 255, int(255 * opacity)))
+        stroke_width = int(settings.get("stroke_width", 0))
+        stroke_rgba = settings.get("stroke_rgba")
+        shadow_offset = settings.get("shadow_offset", (0, 0))
+        shadow_rgba = settings.get("shadow_rgba")
+
+        wm = compose_text_watermark(
+            text=text,
+            font_path=font_path,
+            font_size=font_size,
+            color_rgba=(color_rgba[0], color_rgba[1], color_rgba[2], int(255 * opacity)),
+            stroke_width=stroke_width,
+            stroke_rgba=stroke_rgba,
+            shadow_offset=shadow_offset,
+            shadow_rgba=shadow_rgba,
+        )
+    else:
+        wm_path = settings.get("wm_image_path")
+        if not wm_path or not os.path.exists(wm_path):
+            return img
+        wm = Image.open(wm_path).convert("RGBA")
+        scale = float(settings.get("wm_scale", 1.0))
+        scale = max(0.01, scale)
+        new_size = (max(1, int(wm.width * scale)), max(1, int(wm.height * scale)))
+        wm = wm.resize(new_size, Image.Resampling.LANCZOS)
+        if opacity < 1.0:
+            alpha = wm.split()[-1]
+            enhancer = ImageEnhanceBrightness(alpha)
+            wm.putalpha(enhancer.enhance(opacity))
+
+    # Rotation
+    if rotation_deg % 360 != 0:
+        wm = rotate_image_rgba(wm, rotation_deg)
+
+    # Position
+    pos = calc_position((img.width, img.height), (wm.width, wm.height), position_preset, manual_pos_px, margin=margin)
+
+    # Composite
+    out = img.copy()
+    paste_with_alpha(out, wm, pos)
+    return out
+
+
+def export_image(
+    base_img: Image.Image,
+    settings: Dict[str, Any],
+    export_opts: Dict[str, Any],
+    preview_scale_factor: Optional[float] = None,
+) -> Image.Image:
+    """
+    Apply watermark then optionally resize for export.
+    export_opts:
+      - format: "PNG" or "JPEG"
+      - quality: int 0..100 (JPEG only)
+      - resize: {"width": Optional[int], "height": Optional[int], "percent": Optional[float]}
+    """
+    composed = apply_watermark(base_img, settings, preview_scale_factor=preview_scale_factor)
+    resize_opts = export_opts.get("resize", {})
+    if resize_opts:
+        composed = apply_resize(composed, resize_opts)
+    return composed
