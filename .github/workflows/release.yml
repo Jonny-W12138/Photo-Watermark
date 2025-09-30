@@ -1,0 +1,67 @@
+name: Build and Release 照片水印工具
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # 匹配 v1.0.0 这样的 tag
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest  # 使用 macOS runner 以支持 dmg 和 app 构建
+    permissions:
+      contents: write  # 允许写入 Release
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'  # 使用最新 Python 3.x 版本
+
+      - name: 安装依赖
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -r requirements.txt
+          pip3 install pyinstaller
+
+      - name: 执行 build.sh 构建 app 和 dmg
+        run: |
+          chmod +x build.sh
+          ./build.sh <<< 'y'  # 自动回答 'y' 以创建 DMG 文件
+
+      - name: 创建 Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: |
+            ## 照片水印工具 Release
+            - 自动构建的 macOS 应用程序和 DMG 安装包
+            - 构建时间: ${{ github.event.head_commit.timestamp }}
+          draft: false
+          prerelease: false
+
+      - name: 上传 app 文件到 Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./dist/照片水印工具.app
+          asset_name: 照片水印工具.app
+          asset_content_type: application/octet-stream
+
+      - name: 上传 dmg 文件到 Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./照片水印工具-macOS-$(date +%Y%m%d).dmg
+          asset_name: 照片水印工具-macOS-$(date +%Y%m%d).dmg
+          asset_content_type: application/octet-stream
