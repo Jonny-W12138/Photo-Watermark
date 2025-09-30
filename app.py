@@ -230,9 +230,9 @@ class MainWindow(QWidget):
         self.preview_scale_factor: float = 1.0  # scene pixels to original pixels
         self.watermark_type: str = "text"  # "text" or "image"
         self.text_settings = {
-            "text": "示例水印",
+            "text": "water demo",
             "font_family": "Helvetica",  # Default font family
-            "font_size": 36,
+            "font_size": 50,
             "color_rgba": (255, 255, 255, 255),
             "stroke_width": 0,
             "stroke_rgba": None,
@@ -331,7 +331,7 @@ class MainWindow(QWidget):
         self.text_input = QLineEdit(self.text_settings["text"])
         self.font_combo = QFontComboBoxSafe()
         self.font_size_spin = QSpinBox()
-        self.font_size_spin.setRange(6, 200)
+        self.font_size_spin.setRange(6, 999)
         self.font_size_spin.setValue(self.text_settings["font_size"])
         self.bold_check = QCheckBox("粗体")
         self.italic_check = QCheckBox("斜体")
@@ -392,7 +392,7 @@ class MainWindow(QWidget):
 
         # connect
         self.text_input.textChanged.connect(self.on_text_changed)
-        self.font_combo.currentFontChanged.connect(self.on_font_changed)
+        self.font_combo.set_font_changed_callback(self.on_font_text_changed)
         self.font_size_spin.valueChanged.connect(self.on_font_size_changed)
         self.bold_check.toggled.connect(self.on_font_style_changed)
         self.italic_check.toggled.connect(self.on_font_style_changed)
@@ -669,14 +669,17 @@ class MainWindow(QWidget):
             self.wm_text_item.setPlainText(s)
         self._update_preview()
 
-    def on_font_changed(self, qfont: QFont):
+    def on_font_text_changed(self, font_name: str):
         self.watermark_type = "text"
-        # Try to get font family name for PIL
-        font_family = qfont.family()
-        print(f"Font changed to: {font_family}")
-        # Store font family name instead of path for now
-        self.text_settings["font_family"] = font_family
+        print(f"Font changed to: {font_name}")
+        # Update font family in settings
+        self.text_settings["font_family"] = font_name
+        # Also update the preview immediately
         self._update_preview()
+
+    def on_font_changed(self, qfont: QFont):
+        # Keep this for compatibility, but it's not used anymore
+        self.on_font_text_changed(qfont.family())
 
     def on_font_size_changed(self, v: int):
         self.watermark_type = "text"
@@ -685,7 +688,32 @@ class MainWindow(QWidget):
 
     def on_font_style_changed(self, _=None):
         self.watermark_type = "text"
+        # Store current visual position before updating
+        current_visual_pos = None
+        if hasattr(self, 'wm_text_item') and self.wm_text_item and self.base_item:
+            current_visual_pos = self.wm_text_item.pos()
+        
+        # Update preview with new font style
         self._update_preview()
+        
+        # If we had a visual position and manual position is set, update manual position
+        # to maintain visual consistency after font style change
+        if (current_visual_pos is not None and 
+            self.global_settings.get("manual_pos_px") is not None and
+            hasattr(self, 'wm_text_item') and self.wm_text_item and self.base_item):
+            
+            # Convert current visual position back to original coordinates
+            base_pos = self.base_item.pos()
+            rel_x = current_visual_pos.x() - base_pos.x()
+            rel_y = current_visual_pos.y() - base_pos.y()
+            
+            if self.preview_scale_factor > 0:
+                orig_x = rel_x / self.preview_scale_factor
+                orig_y = rel_y / self.preview_scale_factor
+                self.global_settings["manual_pos_px"] = (orig_x, orig_y)
+                
+                # Re-apply the position to maintain visual consistency
+                self.wm_text_item.setPos(current_visual_pos)
 
     def choose_text_color(self):
         c = QColorDialog.getColor()
@@ -880,8 +908,8 @@ class MainWindow(QWidget):
                 "wm_image_path": self.image_settings.get("wm_image_path"),
                 "wm_scale": self.image_settings.get("wm_scale"),
             }
-            # Debug: print font size being exported
-            print(f"导出字体大小: {settings.get('font_size')}")
+            # Debug: print font settings being exported
+            print(f"导出字体设置: 大小={settings.get('font_size')}, 粗体={settings.get('font_bold')}, 斜体={settings.get('font_italic')}, 字体={settings.get('font_family')}")
             # Don't pass preview_scale_factor to avoid coordinate conversion issues
             composed = export_image(base, settings, {"format": fmt, "quality": quality, "resize": resize}, preview_scale_factor=None)
             # Naming
@@ -940,29 +968,69 @@ class MainWindow(QWidget):
 
 class QFontComboBoxSafe(QComboBox):
     """
-    Lightweight font selector fallback if QFontComboBox is not imported.
-    Uses QFontDatabase via QFontComboBox if available; else provides common choices.
+    Custom font selector that reads system fonts and provides proper signals.
     """
     def __init__(self):
         super().__init__()
-        try:
-            from PyQt6.QtWidgets import QFontComboBox
-            self.inner = QFontComboBox()
-            self.setModel(self.inner.model())
-            self.currentFontChanged = self.inner.currentFontChanged
-        except Exception:
-            # Fallback common fonts
-            self.addItems(["Arial", "Helvetica", "Times New Roman", "Courier New"])
-            self.currentFontChanged = self._dummy_signal
+        self._populate_fonts()
+        # Connect to text change instead of font change
+        self.currentTextChanged.connect(self._on_font_text_changed)
+
+    def _populate_fonts(self):
+        """Populate with available system fonts"""
+        # Get system fonts from common locations on macOS
+        system_fonts = set()
+        
+        font_locations = [
+            "/System/Library/Fonts/",
+            "/System/Library/Fonts/Supplemental/",
+            "/Library/Fonts/"
+        ]
+        
+        for location in font_locations:
+            if os.path.exists(location):
+                try:
+                    for filename in os.listdir(location):
+                        if filename.endswith(('.ttf', '.ttc', '.otf')):
+                            # Extract font name from filename
+                            font_name = os.path.splitext(filename)[0]
+                            # Remove style suffixes
+                            for suffix in [' Bold', ' Italic', ' Bold Italic', '-Bold', '-Italic', '-BoldItalic']:
+                                if font_name.endswith(suffix):
+                                    font_name = font_name[:-len(suffix)]
+                                    break
+                            system_fonts.add(font_name)
+                except Exception:
+                    continue
+        
+        # Add common fonts that should be available
+        common_fonts = [
+            "Helvetica", "Arial", "Times", "Times New Roman", 
+            "Courier", "Courier New", "Georgia", "Verdana"
+        ]
+        
+        for font in common_fonts:
+            system_fonts.add(font)
+        
+        # Sort and add to combo box
+        sorted_fonts = sorted(list(system_fonts))
+        self.addItems(sorted_fonts)
+        
+        # Set default to Helvetica if available
+        if "Helvetica" in sorted_fonts:
+            self.setCurrentText("Helvetica")
+
+    def _on_font_text_changed(self, text):
+        """Emit custom signal when font text changes"""
+        if hasattr(self, '_font_changed_callback'):
+            self._font_changed_callback(text)
 
     def currentFont(self) -> QFont:
-        try:
-            return self.inner.currentFont()
-        except Exception:
-            return QFont(self.currentText())
-
-    def _dummy_signal(self, *args, **kwargs):
-        pass
+        return QFont(self.currentText())
+    
+    def set_font_changed_callback(self, callback):
+        """Set callback for font changes"""
+        self._font_changed_callback = callback
 
 
 def main():

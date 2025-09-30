@@ -52,7 +52,13 @@ def load_font(font_family: Optional[str], size: int, bold: bool = False, italic:
             ],
             "Helvetica": [
                 ("/System/Library/Fonts/Helvetica.ttc", False, False),
-                ("/System/Library/Fonts/Helvetica.ttc", True, False),  # Same file, different index
+                ("/System/Library/Fonts/Helvetica.ttc", True, False),
+                ("/System/Library/Fonts/Helvetica.ttc", False, True),
+                ("/System/Library/Fonts/Helvetica.ttc", True, True),
+            ],
+            "Helvetica Neue": [
+                ("/System/Library/Fonts/Helvetica.ttc", False, False),
+                ("/System/Library/Fonts/Helvetica.ttc", True, False),
                 ("/System/Library/Fonts/Helvetica.ttc", False, True),
                 ("/System/Library/Fonts/Helvetica.ttc", True, True),
             ],
@@ -67,8 +73,60 @@ def load_font(font_family: Optional[str], size: int, bold: bool = False, italic:
                 ("/System/Library/Fonts/Times.ttc", True, False),
                 ("/System/Library/Fonts/Times.ttc", False, True),
                 ("/System/Library/Fonts/Times.ttc", True, True),
+            ],
+            "Courier": [
+                ("/System/Library/Fonts/Courier.ttc", False, False),
+                ("/System/Library/Fonts/Courier.ttc", True, False),
+                ("/System/Library/Fonts/Courier.ttc", False, True),
+                ("/System/Library/Fonts/Courier.ttc", True, True),
+            ],
+            "Courier New": [
+                ("/System/Library/Fonts/Courier.ttc", False, False),
+                ("/System/Library/Fonts/Courier.ttc", True, False),
+                ("/System/Library/Fonts/Courier.ttc", False, True),
+                ("/System/Library/Fonts/Courier.ttc", True, True),
+            ],
+            "Georgia": [
+                ("/System/Library/Fonts/Georgia.ttf", False, False),
+                ("/System/Library/Fonts/Georgia Bold.ttf", True, False),
+                ("/System/Library/Fonts/Georgia Italic.ttf", False, True),
+                ("/System/Library/Fonts/Georgia Bold Italic.ttf", True, True),
+            ],
+            "Verdana": [
+                ("/System/Library/Fonts/Verdana.ttf", False, False),
+                ("/System/Library/Fonts/Verdana Bold.ttf", True, False),
+                ("/System/Library/Fonts/Verdana Italic.ttf", False, True),
+                ("/System/Library/Fonts/Verdana Bold Italic.ttf", True, True),
             ]
         }
+        
+        # Also try to find fonts by searching for similar names
+        if font_family not in font_files:
+            # Try to find font files by searching common locations
+            search_locations = [
+                "/System/Library/Fonts/",
+                "/System/Library/Fonts/Supplemental/",
+                "/Library/Fonts/",
+                "/System/Library/Fonts/Apple Symbols.ttf"
+            ]
+            
+            for location in search_locations:
+                if os.path.isdir(location):
+                    for filename in os.listdir(location):
+                        if font_family.lower() in filename.lower() and (filename.endswith('.ttf') or filename.endswith('.ttc')):
+                            full_path = os.path.join(location, filename)
+                            if filename.endswith('.ttc'):
+                                font_files[font_family] = [
+                                    (full_path, False, False),
+                                    (full_path, True, False),
+                                    (full_path, False, True),
+                                    (full_path, True, True),
+                                ]
+                            else:
+                                font_files[font_family] = [(full_path, False, False)]
+                            break
+                if font_family in font_files:
+                    break
         
         if font_family in font_files:
             # Find the best matching variant with font index for .ttc files
@@ -209,34 +267,45 @@ def compose_text_watermark(
     
     font = load_font(font_family, size=font_size, bold=bold, italic=italic)
     
-    # Preliminary size calculation
-    dummy_img = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))  # Larger dummy canvas
+    # Preliminary size calculation with more accurate text metrics
+    dummy_img = Image.new("RGBA", (2000, 1000), (0, 0, 0, 0))  # Larger dummy canvas
     draw = ImageDraw.Draw(dummy_img)
     
     try:
+        # Get text bounding box
         bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
         text_w = max(1, bbox[2] - bbox[0])
         text_h = max(1, bbox[3] - bbox[1])
+        
+        # Get font metrics for more accurate height calculation
+        ascent, descent = font.getmetrics()
+        font_height = ascent + descent
+        
+        # Use the larger of bbox height and font metrics height
+        text_h = max(text_h, font_height)
+        
+        print(f"Text metrics: bbox=({bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]}), font_height={font_height}, final_h={text_h}")
+        
     except Exception as e:
         print(f"Error calculating text size: {e}")
-        # Fallback size calculation
+        # Fallback size calculation with generous height
         text_w = len(text) * font_size // 2
-        text_h = font_size
+        text_h = int(font_size * 1.5)  # More generous height
     
-    # Calculate padding
+    # Calculate padding with extra space for descenders
     shadow_pad = max(abs(shadow_offset[0]), abs(shadow_offset[1])) if shadow_offset != (0, 0) else 0
-    pad = max(10, stroke_width + shadow_pad + 5)  # Extra padding for safety
+    pad = max(20, stroke_width + shadow_pad + 10)  # More generous padding
     
-    # Create canvas with reasonable size limits
+    # Create canvas with reasonable size limits and extra height for descenders
     canvas_w = min(max(text_w + pad * 2, 50), 2000)  # Between 50 and 2000 pixels
-    canvas_h = min(max(text_h + pad * 2, 20), 1000)  # Between 20 and 1000 pixels
+    canvas_h = min(max(text_h + pad * 2, 40), 1000)  # Between 40 and 1000 pixels, more generous
     
     canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    # Center the text in the canvas
-    x = (canvas_w - text_w) // 2
-    y = (canvas_h - text_h) // 2
+    # Position text with proper baseline consideration
+    x = pad  # Left padding
+    y = pad  # Top padding with extra space for ascenders
 
     # Shadow
     if shadow_rgba and (shadow_offset != (0, 0)) and len(shadow_rgba) >= 3:
