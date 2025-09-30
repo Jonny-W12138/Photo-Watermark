@@ -586,24 +586,40 @@ class MainWindow(QWidget):
         else:
             # image watermark
             wm_path = self.image_settings["wm_image_path"]
+            print(f"图片水印预览: 路径={wm_path}")
+            
             if wm_path and os.path.exists(wm_path):
-                wm_img = Image.open(wm_path).convert("RGBA")
-                scale = self.image_settings["wm_scale"]
-                disp_wm = wm_img.resize(
-                    (max(1, int(wm_img.width * scale * self.preview_scale_factor)),
-                     max(1, int(wm_img.height * scale * self.preview_scale_factor))),
-                    Image.Resampling.LANCZOS
-                )
-                wm_pix = pil_to_qpixmap(disp_wm)
-                self.wm_item = DraggableWatermarkItem(wm_pix)
-                self.wm_item.setOpacity(self.global_settings["opacity"])
-                # Set boundary rectangle for constraining movement
-                self.wm_item.setBaseRect(self.base_item.boundingRect())
-                self.scene.addItem(self.wm_item)
-                self._place_wm_item(self.wm_item)
-                self._rotate_item(self.wm_item, self.global_settings["rotation_deg"])
-                # Set initial drag state based on current tab (enable for text/image tabs, disable for layout tab)
-                self._set_watermark_draggable(self.tabs.currentIndex() != 2)
+                print(f"图片文件存在，开始加载...")
+                try:
+                    wm_img = Image.open(wm_path).convert("RGBA")
+                    scale = self.image_settings["wm_scale"]
+                    print(f"原始图片尺寸: {wm_img.size}, 缩放: {scale}, 预览缩放: {self.preview_scale_factor}")
+                    
+                    disp_wm = wm_img.resize(
+                        (max(1, int(wm_img.width * scale * self.preview_scale_factor)),
+                         max(1, int(wm_img.height * scale * self.preview_scale_factor))),
+                        Image.Resampling.LANCZOS
+                    )
+                    print(f"预览图片尺寸: {disp_wm.size}")
+                    
+                    wm_pix = pil_to_qpixmap(disp_wm)
+                    self.wm_item = DraggableWatermarkItem(wm_pix)
+                    self.wm_item.setOpacity(self.global_settings["opacity"])
+                    # Set boundary rectangle for constraining movement
+                    self.wm_item.setBaseRect(self.base_item.boundingRect())
+                    self.scene.addItem(self.wm_item)
+                    print(f"图片水印项已添加到场景")
+                    
+                    self._place_wm_item(self.wm_item)
+                    self._rotate_item(self.wm_item, self.global_settings["rotation_deg"])
+                    # Set initial drag state based on current tab (enable for text/image tabs, disable for layout tab)
+                    self._set_watermark_draggable(self.tabs.currentIndex() != 2)
+                    print(f"图片水印预览完成")
+                    
+                except Exception as e:
+                    print(f"图片水印加载失败: {e}")
+            else:
+                print(f"图片文件不存在或路径为空")
 
         self.view.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
