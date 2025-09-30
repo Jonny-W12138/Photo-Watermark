@@ -29,45 +29,133 @@ PRESET_POSITIONS = {
 }
 
 
-def load_font(font_path: Optional[str], size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
+def load_font(font_family: Optional[str], size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
     """
-    Load a font. If font_path is None or invalid, fall back to default.
-    Note: Pillow does not easily toggle bold/italic without providing specific font files.
+    Load a font by family name. Try to find bold/italic variants when requested.
     """
     # Ensure reasonable font size limits
     size = max(8, min(size, 500))  # Limit font size between 8 and 500
     
-    try:
-        if font_path and os.path.exists(font_path):
-            return ImageFont.truetype(font_path, size=size)
-    except Exception as e:
-        print(f"Failed to load font {font_path}: {e}")
+    print(f"Loading font: family={font_family}, size={size}, bold={bold}, italic={italic}")
     
-    # Try system fonts on macOS
-    system_fonts = [
-        "/System/Library/Fonts/Arial.ttf",
+    # Comprehensive font search for macOS
+    font_search_paths = []
+    
+    if font_family:
+        # Common font families and their actual file names on macOS
+        font_files = {
+            "Arial": [
+                ("/System/Library/Fonts/Supplemental/Arial.ttf", False, False),
+                ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", True, False),
+                ("/System/Library/Fonts/Supplemental/Arial Italic.ttf", False, True),
+                ("/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf", True, True),
+            ],
+            "Helvetica": [
+                ("/System/Library/Fonts/Helvetica.ttc", False, False),
+                ("/System/Library/Fonts/Helvetica.ttc", True, False),  # Same file, different index
+                ("/System/Library/Fonts/Helvetica.ttc", False, True),
+                ("/System/Library/Fonts/Helvetica.ttc", True, True),
+            ],
+            "Times": [
+                ("/System/Library/Fonts/Times.ttc", False, False),
+                ("/System/Library/Fonts/Times.ttc", True, False),
+                ("/System/Library/Fonts/Times.ttc", False, True),
+                ("/System/Library/Fonts/Times.ttc", True, True),
+            ],
+            "Times New Roman": [
+                ("/System/Library/Fonts/Times.ttc", False, False),
+                ("/System/Library/Fonts/Times.ttc", True, False),
+                ("/System/Library/Fonts/Times.ttc", False, True),
+                ("/System/Library/Fonts/Times.ttc", True, True),
+            ]
+        }
+        
+        if font_family in font_files:
+            # Find the best matching variant with font index for .ttc files
+            for font_path, is_bold, is_italic in font_files[font_family]:
+                if bold == is_bold and italic == is_italic:
+                    if font_path.endswith('.ttc'):
+                        # For .ttc files, we need to specify the font index
+                        if font_family == "Helvetica":
+                            if bold and italic:
+                                font_search_paths.append((font_path, 3))  # Bold Italic
+                            elif bold:
+                                font_search_paths.append((font_path, 1))  # Bold
+                            elif italic:
+                                font_search_paths.append((font_path, 2))  # Italic
+                            else:
+                                font_search_paths.append((font_path, 0))  # Regular
+                        elif font_family in ["Times", "Times New Roman"]:
+                            if bold and italic:
+                                font_search_paths.append((font_path, 3))  # Bold Italic
+                            elif bold:
+                                font_search_paths.append((font_path, 1))  # Bold
+                            elif italic:
+                                font_search_paths.append((font_path, 2))  # Italic
+                            else:
+                                font_search_paths.append((font_path, 0))  # Regular
+                        else:
+                            font_search_paths.append((font_path, 0))
+                    else:
+                        font_search_paths.append((font_path, None))
+                    break
+            # If exact match not found, try regular variant
+            if not font_search_paths:
+                for font_path, _, _ in font_files[font_family]:
+                    if font_path.endswith('.ttc'):
+                        font_search_paths.append((font_path, 0))  # Regular
+                    else:
+                        font_search_paths.append((font_path, None))
+                    break
+    
+    # Add fallback fonts
+    font_search_paths.extend([
+        ("/System/Library/Fonts/Helvetica.ttc", 0),
+        ("/System/Library/Fonts/Times.ttc", 0),
+        ("/System/Library/Fonts/Supplemental/Arial.ttf", None),
+    ])
+    
+    # Try each font path
+    for font_info in font_search_paths:
+        if isinstance(font_info, tuple):
+            font_path, font_index = font_info
+        else:
+            font_path, font_index = font_info, None
+            
+        try:
+            if os.path.exists(font_path):
+                print(f"Trying font: {font_path} (index: {font_index})")
+                if font_index is not None:
+                    font = ImageFont.truetype(font_path, size=size, index=font_index)
+                else:
+                    font = ImageFont.truetype(font_path, size=size)
+                print(f"Successfully loaded font: {font_path} (index: {font_index})")
+                return font
+        except Exception as e:
+            print(f"Failed to load {font_path} (index: {font_index}): {e}")
+            continue
+    
+    # Final fallback - try common system fonts
+    fallback_fonts = [
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Times.ttc",
-        "/Library/Fonts/Arial.ttf"
+        "/System/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Times.ttc"
     ]
     
-    for font_file in system_fonts:
+    for font_file in fallback_fonts:
         try:
             if os.path.exists(font_file):
+                print(f"Using fallback font: {font_file}")
                 return ImageFont.truetype(font_file, size=size)
         except Exception:
             continue
     
-    # Final fallback
+    # Last resort - default font
+    print("Using default font")
     try:
-        return ImageFont.truetype("DejaVuSans.ttf", size=size)
+        return ImageFont.load_default()
     except Exception:
-        # Use default font but try to scale it
-        try:
-            return ImageFont.load_default()
-        except Exception:
-            # Create a minimal font as last resort
-            return ImageFont.load_default()
+        return ImageFont.load_default()
 
 
 def apply_resize(img: Image.Image, resize_opts: Dict[str, Any]) -> Image.Image:
@@ -97,13 +185,15 @@ def apply_resize(img: Image.Image, resize_opts: Dict[str, Any]) -> Image.Image:
 
 def compose_text_watermark(
     text: str,
-    font_path: Optional[str],
+    font_family: Optional[str],
     font_size: int,
     color_rgba: Tuple[int, int, int, int],
     stroke_width: int = 0,
     stroke_rgba: Optional[Tuple[int, int, int, int]] = None,
     shadow_offset: Tuple[int, int] = (0, 0),
     shadow_rgba: Optional[Tuple[int, int, int, int]] = None,
+    bold: bool = False,
+    italic: bool = False,
 ) -> Image.Image:
     """
     Create a RGBA image containing the rendered text with optional stroke and shadow.
@@ -117,7 +207,7 @@ def compose_text_watermark(
     
     print(f"Creating text watermark: '{text}' with font size {font_size}")
     
-    font = load_font(font_path, size=font_size)
+    font = load_font(font_family, size=font_size, bold=bold, italic=italic)
     
     # Preliminary size calculation
     dummy_img = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))  # Larger dummy canvas
@@ -295,7 +385,7 @@ def apply_watermark(
 
     if typ == "text":
         text = settings.get("text", "")
-        font_path = settings.get("font_path")
+        font_family = settings.get("font_family")
         font_size = int(settings.get("font_size", 32))
         color_rgba = settings.get("color_rgba", (255, 255, 255, int(255 * opacity)))
         stroke_width = int(settings.get("stroke_width", 0))
@@ -303,15 +393,20 @@ def apply_watermark(
         shadow_offset = settings.get("shadow_offset", (0, 0))
         shadow_rgba = settings.get("shadow_rgba")
 
+        font_bold = settings.get("font_bold", False)
+        font_italic = settings.get("font_italic", False)
+        
         wm = compose_text_watermark(
             text=text,
-            font_path=font_path,
+            font_family=font_family,
             font_size=font_size,
             color_rgba=(color_rgba[0], color_rgba[1], color_rgba[2], int(255 * opacity)),
             stroke_width=stroke_width,
             stroke_rgba=stroke_rgba,
             shadow_offset=shadow_offset,
             shadow_rgba=shadow_rgba,
+            bold=font_bold,
+            italic=font_italic,
         )
     else:
         wm_path = settings.get("wm_image_path")

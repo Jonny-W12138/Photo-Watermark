@@ -231,7 +231,7 @@ class MainWindow(QWidget):
         self.watermark_type: str = "text"  # "text" or "image"
         self.text_settings = {
             "text": "示例水印",
-            "font_path": None,
+            "font_family": "Helvetica",  # Default font family
             "font_size": 36,
             "color_rgba": (255, 255, 255, 255),
             "stroke_width": 0,
@@ -671,7 +671,11 @@ class MainWindow(QWidget):
 
     def on_font_changed(self, qfont: QFont):
         self.watermark_type = "text"
-        # Path mapping not trivial; export uses PIL fallback font unless specific path provided
+        # Try to get font family name for PIL
+        font_family = qfont.family()
+        print(f"Font changed to: {font_family}")
+        # Store font family name instead of path for now
+        self.text_settings["font_family"] = font_family
         self._update_preview()
 
     def on_font_size_changed(self, v: int):
@@ -864,8 +868,10 @@ class MainWindow(QWidget):
                 "manual_pos_px": self.global_settings.get("manual_pos_px"),
                 "margin": self.global_settings.get("margin", (10, 10)),
                 "text": self.text_settings.get("text"),
-                "font_path": self.text_settings.get("font_path"),
+                "font_family": self.text_settings.get("font_family"),
                 "font_size": self.text_settings.get("font_size"),
+                "font_bold": self.bold_check.isChecked(),
+                "font_italic": self.italic_check.isChecked(),
                 "color_rgba": self.text_settings.get("color_rgba"),
                 "stroke_width": self.text_settings.get("stroke_width"),
                 "stroke_rgba": self.text_settings.get("stroke_rgba"),
