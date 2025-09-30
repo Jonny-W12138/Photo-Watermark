@@ -749,14 +749,16 @@ class MainWindow(QWidget):
         item.setPos(x, y)
 
     def _rotate_item(self, item, deg):
-        transform = QTransform()
+        # Get the bounding rectangle to calculate center
         br = item.boundingRect()
-        cx = br.width() / 2
-        cy = br.height() / 2
-        transform.translate(item.pos().x() + cx, item.pos().y() + cy)
-        transform.rotate(deg)
-        transform.translate(-(item.pos().x() + cx), -(item.pos().y() + cy))
-        item.setTransform(transform)
+        
+        # Set the transform origin to the center of the item
+        center_x = br.width() / 2
+        center_y = br.height() / 2
+        item.setTransformOriginPoint(center_x, center_y)
+        
+        # Use the built-in rotation method which should preserve position
+        item.setRotation(deg)
 
     # Callbacks for text tab
     def on_text_changed(self, s: str):
@@ -848,7 +850,19 @@ class MainWindow(QWidget):
 
     def on_rotate_changed(self, v: int):
         self.global_settings["rotation_deg"] = float(v)
-        self._update_preview()
+        
+        # Only update rotation of existing watermark item, don't recreate the entire preview
+        current_item = None
+        if self.watermark_type == "text" and hasattr(self, 'wm_text_item') and self.wm_text_item:
+            current_item = self.wm_text_item
+        elif self.watermark_type == "image" and hasattr(self, 'wm_item') and self.wm_item:
+            current_item = self.wm_item
+            
+        if current_item:
+            self._rotate_item(current_item, float(v))
+        else:
+            # Fallback to full update if no current item exists
+            self._update_preview()
 
     def set_preset(self, key: str):
         self.global_settings["position_preset"] = key
