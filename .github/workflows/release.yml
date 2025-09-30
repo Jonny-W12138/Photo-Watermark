@@ -1,4 +1,4 @@
-```yaml
+
 name: Build and Release 照片水印工具
 
 on:
@@ -77,4 +77,3 @@ jobs:
           asset_path: ./照片水印工具-macOS-$(date +%Y%m%d).dmg
           asset_name: 照片水印工具-macOS-$(date +%Y%m%d).dmg
           asset_content_type: application/octet-stream
-```
