@@ -129,8 +129,6 @@ class ExportDialog(QDialog):
         self.height_edit = QLineEdit()
         self.percent_edit = QLineEdit()
 
-        self.name_rule_combo = QComboBox()
-        self.name_rule_combo.addItems(["保留原文件名", "添加前缀", "添加后缀"])
         self.prefix_edit = QLineEdit()
         self.suffix_edit = QLineEdit()
 
@@ -145,7 +143,6 @@ class ExportDialog(QDialog):
         form.addRow("按宽度(px)", self.width_edit)
         form.addRow("按高度(px)", self.height_edit)
         form.addRow("按比例(如1.0或0.5)", self.percent_edit)
-        form.addRow("命名规则", self.name_rule_combo)
         form.addRow("前缀", self.prefix_edit)
         form.addRow("后缀", self.suffix_edit)
         form.addRow(self.out_dir_btn, self.out_dir_label)
@@ -200,7 +197,6 @@ class ExportDialog(QDialog):
                 resize["percent"] = float(p)
             except Exception:
                 pass
-        name_rule = self.name_rule_combo.currentText()
         prefix = self.prefix_edit.text().strip()
         suffix = self.suffix_edit.text().strip()
 
@@ -210,7 +206,6 @@ class ExportDialog(QDialog):
             "format": fmt,
             "quality": quality,
             "resize": resize,
-            "name_rule": name_rule,
             "prefix": prefix,
             "suffix": suffix,
             "out_dir": out_dir if out_dir and out_dir != "未选择" else None,
@@ -623,6 +618,67 @@ class MainWindow(QWidget):
 
         self.view.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
+    def _update_text_watermark_only(self):
+        """Update only the text watermark without recreating the entire preview"""
+        if not hasattr(self, 'wm_text_item') or not self.wm_text_item or not self.base_item:
+            # If no existing text item, fall back to full update
+            self._update_preview()
+            return
+            
+        # Store current position, rotation, and size for comparison
+        current_pos = self.wm_text_item.pos()
+        current_rotation = self.wm_text_item.rotation()
+        old_rect = self.wm_text_item.boundingRect()
+        
+        # Remove old text item
+        self.scene.removeItem(self.wm_text_item)
+        
+        # Create new text watermark with updated settings
+        text_img = self._render_text_preview()
+        if text_img:
+            text_pix = pil_to_qpixmap(text_img)
+            self.wm_text_item = DraggableWatermarkItem(text_pix)
+            # Opacity is already applied in PIL rendering
+            self.wm_text_item.setOpacity(1.0)
+            # Set boundary rectangle for constraining movement
+            self.wm_text_item.setBaseRect(self.base_item.boundingRect())
+            self.scene.addItem(self.wm_text_item)
+            
+            # Get new size
+            new_rect = self.wm_text_item.boundingRect()
+            
+            # Adjust position to maintain visual center consistency when size changes
+            # But only if there's no rotation to avoid coordinate system complications
+            if (old_rect.width() != new_rect.width() or old_rect.height() != new_rect.height()) and abs(current_rotation) < 0.1:
+                # Calculate the center point of the old item
+                old_center_x = current_pos.x() + old_rect.width() / 2
+                old_center_y = current_pos.y() + old_rect.height() / 2
+                
+                # Calculate new position to maintain the same center
+                new_pos_x = old_center_x - new_rect.width() / 2
+                new_pos_y = old_center_y - new_rect.height() / 2
+                
+                # Update the position
+                current_pos = QPointF(new_pos_x, new_pos_y)
+                
+                # Update manual position in settings if it exists
+                if self.global_settings.get("manual_pos_px") is not None:
+                    base_pos = self.base_item.pos()
+                    rel_x = current_pos.x() - base_pos.x()
+                    rel_y = current_pos.y() - base_pos.y()
+                    
+                    if self.preview_scale_factor > 0:
+                        orig_x = rel_x / self.preview_scale_factor
+                        orig_y = rel_y / self.preview_scale_factor
+                        self.global_settings["manual_pos_px"] = (orig_x, orig_y)
+            
+            # Restore position and rotation
+            self.wm_text_item.setPos(current_pos)
+            self.wm_text_item.setRotation(current_rotation)
+            
+            # Set draggable state
+            self._set_watermark_draggable(self.tabs.currentIndex() != 2)
+
     def _render_text_preview(self) -> Optional[Image.Image]:
         """Render text watermark using PIL for accurate preview with stroke and shadow effects"""
         from watermark_engine import load_font, compose_text_watermark
@@ -780,16 +836,16 @@ class MainWindow(QWidget):
     def on_text_changed(self, s: str):
         self.watermark_type = "text"
         self.text_settings["text"] = s
-        # Text item is now a rendered pixmap, so we need to update the entire preview
-        self._update_preview()
+        # Update only text watermark to preserve position
+        self._update_text_watermark_only()
 
     def on_font_text_changed(self, font_name: str):
         self.watermark_type = "text"
         print(f"Font changed to: {font_name}")
         # Update font family in settings
         self.text_settings["font_family"] = font_name
-        # Also update the preview immediately
-        self._update_preview()
+        # Update only text watermark to preserve position
+        self._update_text_watermark_only()
 
     def on_font_changed(self, qfont: QFont):
         # Keep this for compatibility, but it's not used anymore
@@ -798,71 +854,60 @@ class MainWindow(QWidget):
     def on_font_size_changed(self, v: int):
         self.watermark_type = "text"
         self.text_settings["font_size"] = v
-        self._update_preview()
+        # Update only text watermark to preserve position
+        self._update_text_watermark_only()
 
     def on_font_style_changed(self, _=None):
         self.watermark_type = "text"
-        # Store current visual position before updating
-        current_visual_pos = None
-        current_item = None
-        
-        # Text watermark now uses wm_text_item (which is a DraggableWatermarkItem for rendered text)
-        if hasattr(self, 'wm_text_item') and self.wm_text_item and self.base_item:
-            current_visual_pos = self.wm_text_item.pos()
-            current_item = self.wm_text_item
-        
-        # Update preview with new font style
-        self._update_preview()
-        
-        # If we had a visual position and manual position is set, update manual position
-        # to maintain visual consistency after font style change
-        if (current_visual_pos is not None and 
-            self.global_settings.get("manual_pos_px") is not None and
-            hasattr(self, 'wm_text_item') and self.wm_text_item and self.base_item):
-            
-            # Convert current visual position back to original coordinates
-            base_pos = self.base_item.pos()
-            rel_x = current_visual_pos.x() - base_pos.x()
-            rel_y = current_visual_pos.y() - base_pos.y()
-            
-            if self.preview_scale_factor > 0:
-                orig_x = rel_x / self.preview_scale_factor
-                orig_y = rel_y / self.preview_scale_factor
-                self.global_settings["manual_pos_px"] = (orig_x, orig_y)
-                
-                # Re-apply the position to maintain visual consistency
-                self.wm_text_item.setPos(current_visual_pos)
+        # Update only text watermark to preserve position
+        self._update_text_watermark_only()
 
     def choose_text_color(self):
         c = QColorDialog.getColor()
         if c.isValid():
             self.text_settings["color_rgba"] = (c.red(), c.green(), c.blue(), 255)
-            self._update_preview()
+            # Update only text watermark to preserve position
+            self._update_text_watermark_only()
 
     def on_opacity_changed(self, v: int):
         op = v / 100.0
         self.global_settings["opacity"] = op
-        self._update_preview()
+        
+        # Update opacity of existing watermark item without recreating preview
+        current_item = None
+        if self.watermark_type == "text" and hasattr(self, 'wm_text_item') and self.wm_text_item:
+            # For text watermark, we need to re-render with new opacity
+            self._update_text_watermark_only()
+        elif self.watermark_type == "image" and hasattr(self, 'wm_item') and self.wm_item:
+            # For image watermark, just update the opacity
+            self.wm_item.setOpacity(op)
+        else:
+            # Fallback to full update if no current item exists
+            self._update_preview()
 
     def on_stroke_width_changed(self, v: int):
         self.text_settings["stroke_width"] = v
-        self._update_preview()
+        # Update only text watermark to preserve position
+        self._update_text_watermark_only()
 
     def choose_stroke_color(self):
         c = QColorDialog.getColor()
         if c.isValid():
             self.text_settings["stroke_rgba"] = (c.red(), c.green(), c.blue(), 255)
-            self._update_preview()
+            # Update only text watermark to preserve position
+            self._update_text_watermark_only()
 
     def choose_shadow_color(self):
         c = QColorDialog.getColor()
         if c.isValid():
             self.text_settings["shadow_rgba"] = (c.red(), c.green(), c.blue(), 128)
-            self._update_preview()
+            # Update only text watermark to preserve position
+            self._update_text_watermark_only()
 
     def on_shadow_offset_changed(self, _=None):
         self.text_settings["shadow_offset"] = (self.shadow_offset_x.value(), self.shadow_offset_y.value())
-        self._update_preview()
+        # Update only text watermark to preserve position
+        self._update_text_watermark_only()
 
     def on_rotate_changed(self, v: int):
         self.global_settings["rotation_deg"] = float(v)
@@ -1018,7 +1063,6 @@ class MainWindow(QWidget):
         fmt = opts["format"]
         quality = opts["quality"]
         resize = opts["resize"]
-        name_rule = opts["name_rule"]
         prefix = opts["prefix"]
         suffix = opts["suffix"]
 
@@ -1051,14 +1095,17 @@ class MainWindow(QWidget):
             print(f"导出字体设置: 大小={settings.get('font_size')}, 粗体={settings.get('font_bold')}, 斜体={settings.get('font_italic')}, 字体={settings.get('font_family')}")
             # Don't pass preview_scale_factor to avoid coordinate conversion issues
             composed = export_image(base, settings, {"format": fmt, "quality": quality, "resize": resize}, preview_scale_factor=None)
-            # Naming
+            # Naming - automatically add prefix and/or suffix if provided
             base_name = os.path.splitext(os.path.basename(p))[0]
-            if name_rule == "添加前缀" and prefix:
-                out_name = prefix + base_name
-            elif name_rule == "添加后缀" and suffix:
-                out_name = base_name + suffix
-            else:
-                out_name = base_name
+            out_name = base_name
+            
+            # Add prefix if provided
+            if prefix:
+                out_name = prefix + out_name
+            
+            # Add suffix if provided  
+            if suffix:
+                out_name = out_name + suffix
             ext = ".jpg" if fmt == "JPEG" else ".png"
             out_path = os.path.join(out_dir, out_name + ext)
 
