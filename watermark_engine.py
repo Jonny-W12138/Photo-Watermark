@@ -34,16 +34,40 @@ def load_font(font_path: Optional[str], size: int, bold: bool = False, italic: b
     Load a font. If font_path is None or invalid, fall back to default.
     Note: Pillow does not easily toggle bold/italic without providing specific font files.
     """
+    # Ensure reasonable font size limits
+    size = max(8, min(size, 500))  # Limit font size between 8 and 500
+    
     try:
         if font_path and os.path.exists(font_path):
             return ImageFont.truetype(font_path, size=size)
-    except Exception:
-        pass
-    # Fallback: DejaVuSans (if available), otherwise PIL default (bitmap)
+    except Exception as e:
+        print(f"Failed to load font {font_path}: {e}")
+    
+    # Try system fonts on macOS
+    system_fonts = [
+        "/System/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Times.ttc",
+        "/Library/Fonts/Arial.ttf"
+    ]
+    
+    for font_file in system_fonts:
+        try:
+            if os.path.exists(font_file):
+                return ImageFont.truetype(font_file, size=size)
+        except Exception:
+            continue
+    
+    # Final fallback
     try:
         return ImageFont.truetype("DejaVuSans.ttf", size=size)
     except Exception:
-        return ImageFont.load_default()
+        # Use default font but try to scale it
+        try:
+            return ImageFont.load_default()
+        except Exception:
+            # Create a minimal font as last resort
+            return ImageFont.load_default()
 
 
 def apply_resize(img: Image.Image, resize_opts: Dict[str, Any]) -> Image.Image:
@@ -84,38 +108,70 @@ def compose_text_watermark(
     """
     Create a RGBA image containing the rendered text with optional stroke and shadow.
     """
+    # Ensure valid parameters
+    if not text or not text.strip():
+        text = "Sample"
+    
+    font_size = max(8, min(font_size, 500))  # Reasonable size limits
+    stroke_width = max(0, min(stroke_width, 20))  # Reasonable stroke limits
+    
+    print(f"Creating text watermark: '{text}' with font size {font_size}")
+    
     font = load_font(font_path, size=font_size)
-    # Preliminary size
-    dummy_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    
+    # Preliminary size calculation
+    dummy_img = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))  # Larger dummy canvas
     draw = ImageDraw.Draw(dummy_img)
-    bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    pad = max(4, stroke_width + max(abs(shadow_offset[0]), abs(shadow_offset[1])))
-    canvas = Image.new("RGBA", (text_w + pad * 2, text_h + pad * 2), (0, 0, 0, 0))
+    
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+        text_w = max(1, bbox[2] - bbox[0])
+        text_h = max(1, bbox[3] - bbox[1])
+    except Exception as e:
+        print(f"Error calculating text size: {e}")
+        # Fallback size calculation
+        text_w = len(text) * font_size // 2
+        text_h = font_size
+    
+    # Calculate padding
+    shadow_pad = max(abs(shadow_offset[0]), abs(shadow_offset[1])) if shadow_offset != (0, 0) else 0
+    pad = max(10, stroke_width + shadow_pad + 5)  # Extra padding for safety
+    
+    # Create canvas with reasonable size limits
+    canvas_w = min(max(text_w + pad * 2, 50), 2000)  # Between 50 and 2000 pixels
+    canvas_h = min(max(text_h + pad * 2, 20), 1000)  # Between 20 and 1000 pixels
+    
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    x = pad
-    y = pad
+    # Center the text in the canvas
+    x = (canvas_w - text_w) // 2
+    y = (canvas_h - text_h) // 2
 
     # Shadow
-    if shadow_rgba and (shadow_offset != (0, 0)):
+    if shadow_rgba and (shadow_offset != (0, 0)) and len(shadow_rgba) >= 3:
         sx = x + shadow_offset[0]
         sy = y + shadow_offset[1]
+        # Ensure shadow_rgba is a valid tuple
+        safe_shadow_rgba = tuple(int(c) for c in shadow_rgba[:4])
         draw.text(
             (sx, sy),
             text,
             font=font,
-            fill=shadow_rgba,
+            fill=safe_shadow_rgba,
             stroke_width=stroke_width,
-            stroke_fill=shadow_rgba if stroke_rgba is None else stroke_rgba,
+            stroke_fill=safe_shadow_rgba if stroke_rgba is None else tuple(int(c) for c in stroke_rgba[:4]),
         )
 
     # Stroke + Text
-    if stroke_width > 0 and stroke_rgba:
-        draw.text((x, y), text, font=font, fill=color_rgba, stroke_width=stroke_width, stroke_fill=stroke_rgba)
+    # Ensure color_rgba is a valid tuple
+    safe_color_rgba = tuple(int(c) for c in color_rgba[:4]) if color_rgba and len(color_rgba) >= 3 else (255, 255, 255, 255)
+    
+    if stroke_width > 0 and stroke_rgba and len(stroke_rgba) >= 3:
+        safe_stroke_rgba = tuple(int(c) for c in stroke_rgba[:4])
+        draw.text((x, y), text, font=font, fill=safe_color_rgba, stroke_width=stroke_width, stroke_fill=safe_stroke_rgba)
     else:
-        draw.text((x, y), text, font=font, fill=color_rgba)
+        draw.text((x, y), text, font=font, fill=safe_color_rgba)
 
     return canvas
 

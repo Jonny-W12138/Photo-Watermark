@@ -50,6 +50,30 @@ class DraggableWatermarkItem(QGraphicsPixmapItem):
             | QGraphicsPixmapItem.GraphicsItemFlag.ItemIsSelectable
         )
         self.setOpacity(1.0)
+        self.base_rect = None  # Will be set by parent
+        
+    def setBaseRect(self, rect):
+        """Set the boundary rectangle for constraining movement"""
+        self.base_rect = rect
+        
+    def itemChange(self, change, value):
+        """Override to constrain movement within base image bounds"""
+        if change == QGraphicsPixmapItem.GraphicsItemChange.ItemPositionChange and self.base_rect:
+            new_pos = value
+            item_rect = self.boundingRect()
+            
+            # Constrain to base image bounds
+            min_x = self.base_rect.left()
+            min_y = self.base_rect.top()
+            max_x = self.base_rect.right() - item_rect.width()
+            max_y = self.base_rect.bottom() - item_rect.height()
+            
+            constrained_x = max(min_x, min(new_pos.x(), max_x))
+            constrained_y = max(min_y, min(new_pos.y(), max_y))
+            
+            return QPointF(constrained_x, constrained_y)
+        
+        return super().itemChange(change, value)
 
 
 class DraggableTextItem(QGraphicsTextItem):
@@ -64,6 +88,30 @@ class DraggableTextItem(QGraphicsTextItem):
             | QGraphicsTextItem.GraphicsItemFlag.ItemIsSelectable
         )
         self.setOpacity(1.0)
+        self.base_rect = None  # Will be set by parent
+        
+    def setBaseRect(self, rect):
+        """Set the boundary rectangle for constraining movement"""
+        self.base_rect = rect
+        
+    def itemChange(self, change, value):
+        """Override to constrain movement within base image bounds"""
+        if change == QGraphicsTextItem.GraphicsItemChange.ItemPositionChange and self.base_rect:
+            new_pos = value
+            item_rect = self.boundingRect()
+            
+            # Constrain to base image bounds
+            min_x = self.base_rect.left()
+            min_y = self.base_rect.top()
+            max_x = self.base_rect.right() - item_rect.width()
+            max_y = self.base_rect.bottom() - item_rect.height()
+            
+            constrained_x = max(min_x, min(new_pos.x(), max_x))
+            constrained_y = max(min_y, min(new_pos.y(), max_y))
+            
+            return QPointF(constrained_x, constrained_y)
+        
+        return super().itemChange(change, value)
 
 
 class ExportDialog(QDialog):
@@ -231,11 +279,11 @@ class MainWindow(QWidget):
         self.wm_text_item: Optional[DraggableTextItem] = None  # for text type
 
         # Controls - tabs
-        tabs = QTabWidget()
-        tabs.addTab(self._build_text_tab(), "文本水印")
-        tabs.addTab(self._build_image_tab(), "图片水印")
-        tabs.addTab(self._build_layout_tab(), "布局与导出")
-        tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_text_tab(), "文本水印")
+        self.tabs.addTab(self._build_image_tab(), "图片水印")
+        self.tabs.addTab(self._build_layout_tab(), "布局与导出")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # Templates
         tpl_bar = QHBoxLayout()
@@ -263,17 +311,17 @@ class MainWindow(QWidget):
         right = QVBoxLayout()
         right.addWidget(QLabel("预览"))
         right.addWidget(self.view)
-        right.addWidget(tabs, stretch=0)
+        right.addWidget(self.tabs, stretch=0)
 
         root = QHBoxLayout()
         root.addLayout(left, stretch=1)
         root.addLayout(right, stretch=2)
         self.setLayout(root)
 
-        # Load last settings
-        last = tm.load_last_settings()
-        if last:
-            self._apply_settings_dict(last)
+        # Don't load last settings - always start with defaults
+        # last = tm.load_last_settings()
+        # if last:
+        #     self._apply_settings_dict(last)
 
     # Tabs builders
     def _build_text_tab(self) -> QWidget:
@@ -516,21 +564,36 @@ class MainWindow(QWidget):
         # Watermark item
         self.global_settings["type"] = self.watermark_type
         if self.watermark_type == "text":
+            # Use simple QGraphicsTextItem for preview (faster and more reliable)
             text = self.text_settings["text"]
             self.wm_text_item = DraggableTextItem(text)
+            
+            # Set font with pixel size for consistency
             qfont = QFont(self.font_combo.currentFont())
-            qfont.setPointSize(self.text_settings["font_size"])
+            # Convert font size to pixels and scale for preview
+            pixel_size = int(self.text_settings["font_size"] * self.preview_scale_factor)
+            qfont.setPixelSize(max(8, pixel_size))  # Minimum readable size
             qfont.setBold(self.bold_check.isChecked())
             qfont.setItalic(self.italic_check.isChecked())
             self.wm_text_item.setFont(qfont)
+            
+            # Set color
             rgba = self.text_settings["color_rgba"]
-            self.wm_text_item.setDefaultTextColor(QColor(rgba[0], rgba[1], rgba[2], rgba[3]))
+            if rgba and len(rgba) >= 3:
+                self.wm_text_item.setDefaultTextColor(QColor(rgba[0], rgba[1], rgba[2], rgba[3] if len(rgba) > 3 else 255))
+            else:
+                self.wm_text_item.setDefaultTextColor(QColor(255, 255, 255, 255))
+            
             self.wm_text_item.setOpacity(self.global_settings["opacity"])
+            # Set boundary rectangle for constraining movement
+            self.wm_text_item.setBaseRect(self.base_item.boundingRect())
             self.scene.addItem(self.wm_text_item)
             # Position preset or manual
             self._place_wm_item(self.wm_text_item)
             # Rotation
             self._rotate_item(self.wm_text_item, self.global_settings["rotation_deg"])
+            # Set initial drag state based on current tab (enable for text/image tabs, disable for layout tab)
+            self._set_watermark_draggable(self.tabs.currentIndex() != 2)
         else:
             # image watermark
             wm_path = self.image_settings["wm_image_path"]
@@ -545,56 +608,48 @@ class MainWindow(QWidget):
                 wm_pix = pil_to_qpixmap(disp_wm)
                 self.wm_item = DraggableWatermarkItem(wm_pix)
                 self.wm_item.setOpacity(self.global_settings["opacity"])
+                # Set boundary rectangle for constraining movement
+                self.wm_item.setBaseRect(self.base_item.boundingRect())
                 self.scene.addItem(self.wm_item)
                 self._place_wm_item(self.wm_item)
                 self._rotate_item(self.wm_item, self.global_settings["rotation_deg"])
+                # Set initial drag state based on current tab (enable for text/image tabs, disable for layout tab)
+                self._set_watermark_draggable(self.tabs.currentIndex() != 2)
 
         self.view.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _place_wm_item(self, item):
-        # If manual position exists, place there (converted)
+        # Simplified position calculation that matches export logic exactly
+        base_rect = self.base_item.boundingRect()
+        item_rect = item.boundingRect()
+        
+        # If manual position exists, use it directly (already in preview coordinates)
         if self.global_settings.get("manual_pos_px") is not None:
             mp = self.global_settings["manual_pos_px"]
-            item.setPos(mp[0], mp[1])
+            # Convert from original coordinates to preview coordinates
+            preview_x = mp[0] * self.preview_scale_factor
+            preview_y = mp[1] * self.preview_scale_factor
+            item.setPos(preview_x, preview_y)
             return
-        # Place by preset
+        
+        # Use preset position - simple nine-grid layout
         preset = self.global_settings.get("position_preset", "center")
-        base_rect = self.base_item.boundingRect()
-        iw = 200  # approximate item width
-        ih = 50   # approximate item height
-        if isinstance(item, QGraphicsPixmapItem):
-            br = item.boundingRect()
-            iw = br.width()
-            ih = br.height()
-        elif isinstance(item, QGraphicsTextItem):
-            br = item.boundingRect()
-            iw = br.width()
-            ih = br.height()
-
-        margin = 10
-        x_candidates = {
-            "left": base_rect.left() + margin,
-            "center": base_rect.left() + (base_rect.width() - iw) / 2,
-            "right": base_rect.right() - iw - margin,
-        }
-        y_candidates = {
-            "top": base_rect.top() + margin,
-            "center": base_rect.top() + (base_rect.height() - ih) / 2,
-            "bottom": base_rect.bottom() - ih - margin,
-        }
-        mapping = {
-            "top_left": (x_candidates["left"], y_candidates["top"]),
-            "top_center": (x_candidates["center"], y_candidates["top"]),
-            "top_right": (x_candidates["right"], y_candidates["top"]),
-            "center_left": (x_candidates["left"], y_candidates["center"]),
-            "center": (x_candidates["center"], y_candidates["center"]),
-            "center_right": (x_candidates["right"], y_candidates["center"]),
-            "bottom_left": (x_candidates["left"], y_candidates["bottom"]),
-            "bottom_center": (x_candidates["center"], y_candidates["bottom"]),
-            "bottom_right": (x_candidates["right"], y_candidates["bottom"]),
-        }
-        pos = mapping.get(preset, mapping["center"])
-        item.setPos(pos[0], pos[1])
+        margin = 10 * self.preview_scale_factor  # Scale margin for preview
+        
+        # Calculate position based on preset
+        if preset == "top_left":
+            x, y = base_rect.left() + margin, base_rect.top() + margin
+        elif preset == "top_right":
+            x, y = base_rect.right() - item_rect.width() - margin, base_rect.top() + margin
+        elif preset == "bottom_left":
+            x, y = base_rect.left() + margin, base_rect.bottom() - item_rect.height() - margin
+        elif preset == "bottom_right":
+            x, y = base_rect.right() - item_rect.width() - margin, base_rect.bottom() - item_rect.height() - margin
+        else:  # center
+            x = base_rect.left() + (base_rect.width() - item_rect.width()) / 2
+            y = base_rect.top() + (base_rect.height() - item_rect.height()) / 2
+        
+        item.setPos(x, y)
 
     def _rotate_item(self, item, deg):
         transform = QTransform()
@@ -684,9 +739,31 @@ class MainWindow(QWidget):
 
     def _on_tab_changed(self, idx: int):
         # Switch watermark type based on tab
-        self.watermark_type = "text" if idx == 0 else "image" if idx == 1 else self.watermark_type
-        self.global_settings["type"] = self.watermark_type
-        self._update_preview()
+        if idx == 2:  # Layout tab - disable dragging
+            self._set_watermark_draggable(False)
+            return
+        else:  # Text or Image tab - enable dragging
+            self._set_watermark_draggable(True)
+        
+        new_type = "text" if idx == 0 else "image"
+        if new_type != self.watermark_type:
+            self.watermark_type = new_type
+            self.global_settings["type"] = self.watermark_type
+            self._update_preview()
+    
+    def _set_watermark_draggable(self, draggable: bool):
+        """Enable or disable watermark dragging"""
+        items = []
+        if hasattr(self, 'wm_item') and self.wm_item:
+            items.append(self.wm_item)
+        if hasattr(self, 'wm_text_item') and self.wm_text_item:
+            items.append(self.wm_text_item)
+        
+        for item in items:
+            if draggable:
+                item.setFlags(item.flags() | item.GraphicsItemFlag.ItemIsMovable)
+            else:
+                item.setFlags(item.flags() & ~item.GraphicsItemFlag.ItemIsMovable)
 
     # Templates
     def save_template_clicked(self):
@@ -797,7 +874,10 @@ class MainWindow(QWidget):
                 "wm_image_path": self.image_settings.get("wm_image_path"),
                 "wm_scale": self.image_settings.get("wm_scale"),
             }
-            composed = export_image(base, settings, {"format": fmt, "quality": quality, "resize": resize}, preview_scale_factor=self.preview_scale_factor)
+            # Debug: print font size being exported
+            print(f"导出字体大小: {settings.get('font_size')}")
+            # Don't pass preview_scale_factor to avoid coordinate conversion issues
+            composed = export_image(base, settings, {"format": fmt, "quality": quality, "resize": resize}, preview_scale_factor=None)
             # Naming
             base_name = os.path.splitext(os.path.basename(p))[0]
             if name_rule == "添加前缀" and prefix:
@@ -828,13 +908,27 @@ class MainWindow(QWidget):
 
     # Track manual drag position
     def mouseReleaseEvent(self, event):
-        # After dragging, record manual position in scene coords
-        if self.wm_item and self.scene.items():
-            pos = self.wm_item.pos()
-            self.global_settings["manual_pos_px"] = (pos.x(), pos.y())
-        elif self.wm_text_item and self.scene.items():
-            pos = self.wm_text_item.pos()
-            self.global_settings["manual_pos_px"] = (pos.x(), pos.y())
+        # After dragging, record manual position converted back to original image coordinates
+        dragged_item = None
+        if hasattr(self, 'wm_item') and self.wm_item and self.wm_item in self.scene.items():
+            dragged_item = self.wm_item
+        elif hasattr(self, 'wm_text_item') and self.wm_text_item and self.wm_text_item in self.scene.items():
+            dragged_item = self.wm_text_item
+            
+        if dragged_item and self.base_item:
+            pos = dragged_item.pos()
+            base_pos = self.base_item.pos()
+            
+            # Calculate relative position within the base image (preview coordinates)
+            rel_x = pos.x() - base_pos.x()
+            rel_y = pos.y() - base_pos.y()
+            
+            # Convert from preview coordinates back to original image coordinates
+            if self.preview_scale_factor > 0:
+                orig_x = rel_x / self.preview_scale_factor
+                orig_y = rel_y / self.preview_scale_factor
+                self.global_settings["manual_pos_px"] = (orig_x, orig_y)
+                print(f"拖拽位置: 预览({rel_x:.1f}, {rel_y:.1f}) -> 原图({orig_x:.1f}, {orig_y:.1f})")
         super().mouseReleaseEvent(event)
 
 
