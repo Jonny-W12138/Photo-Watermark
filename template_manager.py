@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Optional
 
 APP_DIR = os.path.join(os.path.expanduser("~"), ".photo_watermark")
 TEMPLATE_DIR = os.path.join(APP_DIR, "templates")
-LAST_SETTINGS_PATH = os.path.join(APP_DIR, "last_settings.json") 
+LAST_SETTINGS_PATH = os.path.join(APP_DIR, "last_settings.json")
 
 
 def ensure_dirs():
