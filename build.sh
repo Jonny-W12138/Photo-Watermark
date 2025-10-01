@@ -53,7 +53,7 @@ if [ $? -eq 0 ]; then
     read -p "是否创建 DMG 安装包？(y/N): " create_dmg
     if [[ $create_dmg =~ ^[Yy]$ ]]; then
         echo "📦 创建 DMG 安装包..."
-        dmg_name="照片水印工具-macOS.dmg"
+        dmg_name="照片水印工具.dmg"
         
         # 删除旧的 DMG
         rm -f "$dmg_name"
